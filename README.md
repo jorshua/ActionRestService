@@ -1,0 +1,4 @@
+ActionRestService
+=================
+
+Scala rest service
