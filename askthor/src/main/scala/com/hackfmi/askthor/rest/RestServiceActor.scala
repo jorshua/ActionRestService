@@ -30,10 +30,10 @@ trait ActionService extends HttpService {
           case httpEntity: HttpEntity =>
             read[Action](httpEntity.asString(HttpCharsets.`UTF-8`))
         }) {
-          customer: Action =>
+          action: Action =>
             ctx: RequestContext =>
               handleRequest(ctx, StatusCodes.Created) {
-                customerService.create(customer)
+                actionService.create(action)
               }
         }
       }
