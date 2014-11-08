@@ -1,13 +1,18 @@
 package com.hackfmi.askthor.rest
 
 import akka.actor.Actor
+import akka.event.slf4j.SLF4JLogging
+import com.hackfmi.askthor.domain._
+import com.hackfmi.askthor.dao._
+import java.text.{ParseException, SimpleDateFormat}
+import java.util.Date
 import net.liftweb.json.Serialization._
 import net.liftweb.json.{DateFormat, Formats}
-import spray.routing._
+import scala.Some
 import spray.http._
-import MediaTypes._
-import spray.httpx.unmarshalling.Unmarshaller
-import com.hackfmi.askthor.domain.Action
+import spray.httpx.unmarshalling._
+import spray.routing._
+
 
 class ActionServiceActor extends Actor with ActionService {
 
@@ -16,15 +21,50 @@ class ActionServiceActor extends Actor with ActionService {
   def receive = runRoute(rest)
 }
 
-trait ActionService extends HttpService {
+trait ActionService extends HttpService with SLF4JLogging {
 
-  val rest = respondWithMediaType(MediaTypes.`text/plain`) {
-    path("action") {
-      get {
-        complete {
-          "test"
+  val actionService = new ActionDAO
+
+  implicit val executionContext = actorRefFactory.dispatcher
+
+  implicit val liftJsonFormats = new Formats {
+    val dateFormat = new DateFormat {
+      val sdf = new SimpleDateFormat("yyyy-MM-dd")
+
+      def parse(s: String): Option[Date] = try {
+        Some(sdf.parse(s))
+      } catch {
+        case e: Exception => None
+      }
+
+      def format(d: Date): String = sdf.format(d)
+    }
+  }
+
+  implicit val string2Date = new FromStringDeserializer[Date] {
+    def apply(value: String) = {
+      val sdf = new SimpleDateFormat("yyyy-MM-dd")
+      try Right(sdf.parse(value))
+      catch {
+        case e: ParseException => {
+          Left(MalformedContent("'%s' is not a valid Date value" format (value), e))
         }
-      } ~
+      }
+    }
+  }
+
+  implicit val customRejectionHandler = RejectionHandler {
+    case rejections => mapHttpResponse {
+      response =>
+        response.withEntity(HttpEntity(ContentType(MediaTypes.`application/json`),
+          write(Map("error" -> response.entity.asString))))
+    } {
+      RejectionHandler.Default(rejections)
+    }
+  }
+
+  val rest = respondWithMediaType(MediaTypes.`application/json`) {
+    path("action") {
       post {
         entity(Unmarshaller(MediaTypes.`application/json`) {
           case httpEntity: HttpEntity =>
@@ -33,19 +73,34 @@ trait ActionService extends HttpService {
           action: Action =>
             ctx: RequestContext =>
               handleRequest(ctx, StatusCodes.Created) {
+                log.debug("Creating action: %s".format(action))
                 actionService.create(action)
               }
         }
-      }
-    } ~
-    path("action" / IntNumber ) {
-      actionId =>
+      } ~
         get {
-          complete {
-            "test ".concat(actionId.toString)
+          parameters('id.as[Long] ?, 'a.as[String] ?, 'b.as[String] ?).
+            as(ActionSearchParameters) {
+            searchParameters: ActionSearchParameters => {
+              ctx: RequestContext =>
+                handleRequest(ctx) {
+                  log.debug("Searching for actions with parameters: %s".format(searchParameters))
+                  actionService.search(searchParameters)
+                }
+            }
           }
         }
-    }
+    } ~
+      path("action" / LongNumber) {
+        actionId =>
+          get {
+            ctx: RequestContext =>
+              handleRequest(ctx) {
+                log.debug("Retrieving action with id %d".format(actionId))
+                actionService.get(actionId)
+              }
+          }
+      }
   }
 
   /**
